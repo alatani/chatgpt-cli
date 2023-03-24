@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "chatgpt-cli"
+version = "0.1.0"
+description = "ChatGPT from CLI"
+authors = ["narita-atsuhiro <alayashiki@gmail.com>"]
+license = "MIT License"
+readme = "README.md"
+packages = [{include = "chatgpt_cli"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+click = "^8.1.3"
+prompt-toolkit = "^3.0.38"
+pyyaml = "^6.0"
+rich = "^13.3.2"
+fire = "^0.5.0"
+
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.1.0"
+mypy = "^1.1.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
