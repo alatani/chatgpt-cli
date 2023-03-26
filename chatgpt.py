@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import atexit
-import click
 import os
+import json
 import requests
 import sys
 import yaml
@@ -16,6 +16,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from rich.panel import Panel
 from rich.console import Console
+from rich.markdown import Markdown
 
 CONFIG_FILE = "config.yaml"
 BASE_ENDPOINT = "https://api.openai.com/v1"
@@ -50,35 +51,60 @@ class Message:
     def to_list(cls, messages: list[Message]) -> list[dict]:
         return [message.to_dict() for message in messages]
 
+    @classmethod
+    def from_list(cls, messages: list[dict]) -> list[Message]:
+        return [cls.from_dict(message) for message in messages]
+
 
 @dataclass
 class ChatContext:
-    file_path: str
-    messages: list[Message] = list
-    """
-    ---
-    %%
-    {
-    }
-    %%
-    """
+    config: dict
+    file_path: str = "./chatlog.md"
+    # message_separator:str = "\n---\n"
+    message_separator:str = "\n\n"
+    json_anchor:str = "\n%%===\n"
 
     def resolve(self) -> list[Message]:
-        return self.messages
-        raise NotImplementedError()
-        with open(self.file_path) as f:
-            self.message = []
+        messages = []
 
-        return self.messages
+        # make empty file if not exists.
+        if not os.path.exists(os.path.expanduser(self.file_path)):
+            with open(os.path.expanduser(self.file_path), "w") as f:
+                pass
 
-    def append(self, message: Message) -> None:
-        self.messages.append(message)
-        self._flush()
+        with open(os.path.expanduser(self.file_path)) as f:
+            content = f.read()
 
-    def _flush(self) -> None:
-        raise NotImplementedError()
-        with open(self.file_path, "w") as f:
-            yaml.dump(self.messages, f)
+            anchor_idx = content.find(self.json_anchor)
+            if anchor_idx >= 0:
+                # json部分
+                context_json = content[anchor_idx+len(self.json_anchor):]
+                messages = Message.from_list(json.loads(context_json))
+                for message in messages:
+                    if message.role == "user":
+                        console.print(">>> " + message.content.strip())
+                        console.print()
+                    if message.role == "assistant":
+                        console.print(Markdown(message.content.strip()))
+                        console.print()
+
+        return messages
+
+    def make_markdown(self, messages: list[Message]) -> str:
+        body = ""
+        body += f"{self.message_separator}".join([
+            f"**{message.role}**: {message.content.strip()}"
+            for message in messages
+        ])
+        return body
+
+    def flush(self, messages: list[Message]) -> None:
+        body = self.make_markdown(messages)
+        body += f"{self.json_anchor}"
+        body += json.dumps(Message.to_list(messages))
+
+        with open(os.path.expanduser(self.file_path), "w") as f:
+            f.write(body)
 
 
 
@@ -183,6 +209,9 @@ class Expense:
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
     def add(self, prompt_tokens: int, completion_tokens: int):
         self.prompt_tokens += prompt_tokens
         self.completion_tokens += completion_tokens
@@ -192,25 +221,21 @@ class Expense:
         Given the model used, display total tokens used and estimated expense
         """
         total_expense = self.__calculate_expense(
-            self.prompt_tokens,
-            self.completion_tokens,
             PRICING_RATE[model]["prompt"],
             PRICING_RATE[model]["completion"],
         )
-        console.print(f"Total tokens used: [green bold]{self.prompt_tokens + self.completion_tokens}")
+        console.print(f"Total tokens used: [green bold]{self.total_tokens()}")
         console.print(f"Estimated expense: [green bold]${total_expense}")
 
     def __calculate_expense(self,
-        prompt_tokens: int,
-        completion_tokens: int,
         prompt_pricing: float,
         completion_pricing: float,
     ) -> float:
         """
         Calculate the expense, given the number of tokens and the pricing rates
         """
-        expense = ((prompt_tokens / 1000) * prompt_pricing) + (
-            (completion_tokens / 1000) * completion_pricing
+        expense = ((self.prompt_tokens / 1000) * prompt_pricing) + (
+            (self.completion_tokens / 1000) * completion_pricing
         )
         return round(expense, 6)
 
@@ -225,7 +250,6 @@ class ChatGptCli:
 
         # try:
         config = load_config(CONFIG_FILE)
-        print(config["api-key"])
 
         #Run the display expense function when exiting the script
         expence = Expense(config)
@@ -233,7 +257,8 @@ class ChatGptCli:
 
         console.print("ChatGPT CLI", style="bold")
         console.print(f"Model in use: [green bold]{config['model']}")
-        messages = []
+        chat_context = ChatContext(config)
+        messages = chat_context.resolve()
 
         # Context from the command line option
         if self.context:
@@ -245,7 +270,7 @@ class ChatGptCli:
         chat_gpt_client = ChatGPTClient(config)
         while True:
             try:
-                input_message = session.prompt(HTML(f"<b>[{prompt_tokens + completion_tokens}] >>> </b>"))
+                input_message = session.prompt(HTML(f"<b>[{expence.total_tokens()}] >>> </b>"))
 
                 if input_message.strip().lower() == "/q":
                     raise EOFError
@@ -253,14 +278,15 @@ class ChatGptCli:
                     raise KeyboardInterrupt
 
                 messages.append(Message(role="user", content=input_message))
-                console.log(messages)
-
                 response: ChatGPTResponse = chat_gpt_client.get_response(messages)
 
-                console.print(response.message.content)
-
+                console.print()
+                console.print(Markdown(response.message.content))
+                console.print()
                 messages.append(response.message)
                 expence.add(response.prompt_tokens, response.completion_tokens)
+
+                chat_context.flush(messages)
             except KeyboardInterrupt:
                 messages.pop()
                 continue
