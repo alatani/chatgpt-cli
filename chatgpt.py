@@ -1,6 +1,7 @@
 #!/bin/env python
 from __future__ import annotations
 
+import time
 import atexit
 import os
 import json
@@ -27,13 +28,7 @@ PRICING_RATE = {
     "gpt-4-32k": {"prompt": 0.06, "completion": 0.12},
 }
 
-
-# Initialize the messages history list
-# It's mandatory to pass it at each API call in order to have a conversation
-messages = []
 # Initialize the token counters
-prompt_tokens = 0
-completion_tokens = 0
 # Initialize the console
 console = Console()
 
@@ -56,13 +51,21 @@ class Message:
         return [cls.from_dict(message) for message in messages]
 
 
-@dataclass
 class ChatContext:
     config: dict
-    file_path: str = "./chatlog.md"
+    file_path: str
+    timestr: str
     # message_separator:str = "\n---\n"
     message_separator:str = "\n\n"
     json_anchor:str = "\n%%===\n"
+
+    def __init__(self, config:dict, filename: str|None = None) -> None:
+        self.config = config
+        if filename is None:
+            self.timestr = time.strftime("%Y%m%d-%H%M%S")
+            self.file_path = os.path.join(".", f"{self.timestr}.md")
+        else:
+            self.file_path = os.path.join(".", filename)
 
     def resolve(self) -> list[Message]:
         messages = []
