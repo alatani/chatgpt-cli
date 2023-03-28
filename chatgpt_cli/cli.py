@@ -302,5 +302,8 @@ class ChatGptCli:
             except EOFError:
                 break
 
-if __name__ == "__main__":
+def main():
     fire.Fire(ChatGptCli)
+
+if __name__ == "__main__":
+    main()
