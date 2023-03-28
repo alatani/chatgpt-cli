@@ -1,2 +1,5 @@
 api-key: "INSERT API KEY HERE"
+profiles:
+  defualt:
+    keyfile: ~/.secrets/openai
 model: "gpt-3.5-turbo"
