@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "chatgpt_cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "ChatGPT from CLI"
 authors = ["narita-atsuhiro <alayashiki@gmail.com>"]
 license = "MIT License"
