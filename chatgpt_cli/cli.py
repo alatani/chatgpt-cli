@@ -1,27 +1,23 @@
 #!/bin/env python
 from __future__ import annotations
 
-import time
 import atexit
-import os
 import json
-import requests
-import sys
-import yaml
+import os
+import time
+from pathlib import Path
+
 import fire
-from dataclasses import dataclass
-from dataclasses_json import dataclass_json
-
+import requests
+import yaml
 from halo import Halo
-
-from prompt_toolkit import PromptSession, HTML
-from prompt_toolkit.history import FileHistory
+from prompt_toolkit import HTML, PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from rich.panel import Panel
+from prompt_toolkit.history import FileHistory
+from pydantic import BaseModel
 from rich.console import Console
 from rich.markdown import Markdown
 
-CONFIG_FILE = "config.yaml"
 BASE_ENDPOINT = "https://api.openai.com/v1"
 
 PRICING_RATE = {
@@ -34,9 +30,7 @@ PRICING_RATE = {
 # Initialize the console
 console = Console()
 
-@dataclass_json
-@dataclass
-class Message:
+class Message(BaseModel):
     role: str
     content: str
 
@@ -46,38 +40,38 @@ class Message:
 
     @classmethod
     def to_list(cls, messages: list[Message]) -> list[dict]:
-        return [message.to_dict() for message in messages]
+        return [message.dict() for message in messages]
 
     @classmethod
     def from_list(cls, messages: list[dict]) -> list[Message]:
-        return [cls.from_dict(message) for message in messages]
+        return [cls(**message) for message in messages]
 
 
-class ChatContext:
+class ChatContext(BaseModel):
     config: dict
-    file_path: str
-    timestr: str
-    # message_separator:str = "\n---\n"
+    logfilepath: Path
+
     message_separator:str = "\n\n"
     json_anchor:str = "\n%%===\n"
 
     def __init__(self, config:dict, filename: str|None = None) -> None:
-        self.config = config
+        timestr = ""
+        logdir = Path(config["chatlog"]["dir"]).expanduser()
         if filename is None:
-            self.timestr = time.strftime("%Y%m%d-%H%M%S")
-            self.file_path = os.path.join(".", f"{self.timestr}.md")
-        else:
-            self.file_path = os.path.join(".", filename)
+            timestr = time.strftime("%Y%m%d-%H%M%S")
+            filename = f"{timestr}.md"
+        super().__init__(config=config, logfilepath=logdir / filename)
 
     def resolve(self) -> list[Message]:
+        assert isinstance(self.logfilepath, Path)
         messages = []
 
         # make empty file if not exists.
-        if not os.path.exists(os.path.expanduser(self.file_path)):
-            with open(os.path.expanduser(self.file_path), "w") as f:
+        if not self.logfilepath.exists():
+            with open(self.logfilepath, "w") as f:
                 pass
 
-        with open(os.path.expanduser(self.file_path)) as f:
+        with open(self.logfilepath) as f:
             content = f.read()
 
             anchor_idx = content.find(self.json_anchor)
@@ -108,15 +102,28 @@ class ChatContext:
         body += f"{self.json_anchor}"
         body += json.dumps(Message.to_list(messages))
 
-        with open(os.path.expanduser(self.file_path), "w") as f:
+        with open(self.logfilepath, "w") as f:
             f.write(body)
 
 
 
-def load_config(config_file: str, profile: str = "defualt") -> dict:
+def load_config(profile: str = "defualt") -> dict:
     """
     Read a YAML config file and returns it's content as a dictionary
     """
+    config_file_candidates = [
+        "~/.chatgpt.yaml",
+        "config.yaml",
+    ]
+    config_file: Path | None = None
+    for i in range(len(config_file_candidates)):
+        config_file = Path(config_file_candidates[i]).expanduser()
+        if config_file.exists():
+            break
+
+    if config_file is None:
+        raise "No config file found."
+
     with open(config_file) as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
 
@@ -124,7 +131,7 @@ def load_config(config_file: str, profile: str = "defualt") -> dict:
         config["api-key"] = os.environ.get("OAI_SECRET_KEY", "fail")
 
     if not config.get("api-key", "").startswith("sk"):
-        keyfile_path = os.path.expanduser(config["profiles"]["defualt"]["keyfile"])
+        keyfile_path = Path(config["profiles"]["defualt"]["keyfile"]).expanduser()
         with open(keyfile_path) as keyfile:
             config["api-key"] = keyfile.read()
 
@@ -137,14 +144,12 @@ def load_config(config_file: str, profile: str = "defualt") -> dict:
     return config
 
 
-@dataclass
-class ChatGPTResponse:
+class ChatGPTResponse(BaseModel):
     message: Message
     prompt_tokens: int
     completion_tokens: int
 
-@dataclass
-class ChatGPTClient:
+class ChatGPTClient(BaseModel):
     config: dict
 
     def get_response(self, messages: list[Message]) -> ChatGPTResponse:
@@ -179,9 +184,9 @@ class ChatGPTClient:
             usage_response = response["usage"]
 
             return ChatGPTResponse(
-                Message(role="assistant", content=message_response['content'].strip()),
-                usage_response["prompt_tokens"],
-                usage_response["completion_tokens"]
+                message = Message(role="assistant", content=message_response['content'].strip()),
+                prompt_tokens = usage_response["prompt_tokens"],
+                completion_tokens = usage_response["completion_tokens"]
             )
 
         elif r.status_code == 400:
@@ -208,8 +213,7 @@ class ChatGPTClient:
             console.print(r.json())
             raise EOFError
 
-@dataclass
-class Expense:
+class Expense(BaseModel):
     config: dict
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -249,15 +253,21 @@ class ChatGptCli:
     def __init__(self, context: str|None = None):
         self.context = context
 
-    def run(self):
+    def debug(self):
+        console.log(Path("~/.chatgpt/config.yaml").expanduser().absolute())
+
+        config = load_config()
+        console.log(config)
+
+    def run(self, profile: str = "default"):
         history = FileHistory(".history")
         session = PromptSession(history=history, multiline=True, auto_suggest=AutoSuggestFromHistory())
 
         # try:
-        config = load_config(CONFIG_FILE)
+        config = load_config(profile)
 
         #Run the display expense function when exiting the script
-        expence = Expense(config)
+        expence = Expense(config=config)
         atexit.register(expence.display, model=config["model"])
 
         console.print("ChatGPT CLI", style="bold")
@@ -268,12 +278,12 @@ class ChatGptCli:
         # Context from the command line option
         if self.context:
             console.print(f"Context file: [green bold]{self.context}")
-            with open(os.path.expanduser(self.context)) as file:
+            with open(Path(self.context).expanduser()) as file:
                 messages.append(Message(role="assistant", content=file.read().strip()))
 
 
         spinner = Halo(text='Waiting..', spinner='dots')
-        chat_gpt_client = ChatGPTClient(config)
+        chat_gpt_client = ChatGPTClient(config=config)
         while True:
             try:
                 input_message = session.prompt(HTML(f"<b>[{expence.total_tokens()}] >>> </b>"))
