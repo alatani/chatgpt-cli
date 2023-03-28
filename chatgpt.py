@@ -12,6 +12,8 @@ import fire
 from dataclasses import dataclass
 from dataclasses_json import dataclass_json
 
+from halo import Halo
+
 from prompt_toolkit import PromptSession, HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
@@ -270,6 +272,7 @@ class ChatGptCli:
                 messages.append(Message(role="assistant", content=file.read().strip()))
 
 
+        spinner = Halo(text='Waiting..', spinner='dots')
         chat_gpt_client = ChatGPTClient(config)
         while True:
             try:
@@ -280,8 +283,11 @@ class ChatGptCli:
                 if input_message.strip().lower() == "":
                     raise KeyboardInterrupt
 
+
+                spinner.start()
                 messages.append(Message(role="user", content=input_message))
                 response: ChatGPTResponse = chat_gpt_client.get_response(messages)
+                spinner.stop()
 
                 console.print()
                 console.print(Markdown(response.message.content))
