@@ -1,6 +1,7 @@
 #!/bin/env python
 from __future__ import annotations
 
+import pkg_resources
 import atexit
 import json
 import os
@@ -52,7 +53,7 @@ class ChatContext(BaseModel):
     logfilepath: Path
 
     message_separator:str = "\n\n"
-    json_anchor:str = "\n%%===\n"
+    json_anchor:str = "\n%%===```\n"
 
     def __init__(self, config:dict, filename: str|None = None) -> None:
         timestr = ""
@@ -266,6 +267,9 @@ class ChatGptCli:
         config = load_config(self.profile)
         console.log(config)
 
+    def version(self):
+        console.print(pkg_resources.get_distribution('chatgpt_cli').version)
+
     def list_models(self, format: str="json"):
         if format == "json":
             console.print(json.dumps(ChatGPTClient(config=self.config).list_models(), indent=2))
@@ -280,10 +284,10 @@ class ChatGptCli:
 
         #Run the display expense function when exiting the script
         expence = Expense(config=self.config)
-        atexit.register(expence.display, model=self.config["model"])
+        atexit.register(expence.display, model=model or self.config["model"])
 
         console.print("ChatGPT CLI", style="bold")
-        console.print(f"Model in use: [green bold]{self.config['model']}")
+        console.print(f"Model in use: [green bold]{model or self.config['model']}")
         chat_context = ChatContext(self.config)
         messages = chat_context.resolve()
 
