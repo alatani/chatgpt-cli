@@ -55,13 +55,20 @@ class ChatContext(BaseModel):
     message_separator:str = "\n\n"
     json_anchor:str = "\n%%===```\n"
 
-    def __init__(self, config:dict, filename: str|None = None) -> None:
-        timestr = ""
+    def __init__(self, config:dict, title: str|None = None) -> None:
         logdir = Path(config["chatlog"]["dir"]).expanduser()
-        if filename is None:
-            timestr = time.strftime("%Y%m%d-%H%M%S")
+        timestr = time.strftime("%Y%m%d-%H%M%S")
+        if title is None:
             filename = f"{timestr}.md"
+        else:
+            filename = f"{timestr}-{title}.md"
         super().__init__(config=config, logfilepath=logdir / filename)
+
+    @classmethod
+    def list(cls, config) -> list[str]:
+        logdir = Path(config["chatlog"]["dir"]).expanduser()
+        return os.listdir(logdir)
+
 
     def resolve(self) -> list[Message]:
         assert isinstance(self.logfilepath, Path)
@@ -278,7 +285,7 @@ class ChatGptCli:
                 console.print(obj["id"])
 
 
-    def run(self, model: str | None = None):
+    def run(self, model: str | None = None, title: str | None = None):
         history = FileHistory(".history")
         session = PromptSession(history=history, multiline=True, auto_suggest=AutoSuggestFromHistory())
 
@@ -288,7 +295,7 @@ class ChatGptCli:
 
         console.print("ChatGPT CLI", style="bold")
         console.print(f"Model in use: [green bold]{model or self.config['model']}")
-        chat_context = ChatContext(self.config)
+        chat_context = ChatContext(self.config, title)
         messages = chat_context.resolve()
 
         # Context from the command line option
