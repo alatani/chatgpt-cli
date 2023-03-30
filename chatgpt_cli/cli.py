@@ -107,7 +107,7 @@ class ChatContext(BaseModel):
 
 
 
-def load_config(profile: str = "defualt") -> dict:
+def load_config(profile: str = "default") -> dict:
     """
     Read a YAML config file and returns it's content as a dictionary
     """
@@ -131,11 +131,10 @@ def load_config(profile: str = "defualt") -> dict:
         config["api-key"] = os.environ.get("OAI_SECRET_KEY", "fail")
 
     if not config.get("api-key", "").startswith("sk"):
-        keyfile_path = Path(config["profiles"]["defualt"]["keyfile"]).expanduser()
+        keyfile_path = Path(config["profiles"][profile]["keyfile"]).expanduser()
         with open(keyfile_path) as keyfile:
-            config["api-key"] = keyfile.read()
+            config["api-key"] = keyfile.read().strip()
 
-    profile = "defualt"
     while not config.get("api-key", "").startswith("sk"):
         config["api-key"] = input(
             "Enter your OpenAI Secret Key (should start with 'sk-')\n"
@@ -150,21 +149,27 @@ class ChatGPTResponse(BaseModel):
     completion_tokens: int
 
 class ChatGPTClient(BaseModel):
+    model: str | None
     config: dict
 
-    def get_response(self, messages: list[Message]) -> ChatGPTResponse:
-        body = {"model": self.config["model"], "messages": Message.to_list(messages)}
-
+    def list_models(self)->list[object]:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.config['api-key']}",
         }
-        # return ChatGPTResponse(
-        #     Message(role="assistant", content="OK"),
-        #     20,10
-        # )
+        return requests.get(
+            f"{BASE_ENDPOINT}/models", headers=headers
+        ).json()["data"]
+
+    def get_response(self, messages: list[Message]) -> ChatGPTResponse:
+        model = self.model or self.config["model"]
+        body = {"model": model, "messages": Message.to_list(messages)}
 
         try:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.config['api-key']}",
+            }
             r = requests.post(
                 f"{BASE_ENDPOINT}/chat/completions", headers=headers, json=body
             )
@@ -250,29 +255,36 @@ class Expense(BaseModel):
 
 
 class ChatGptCli:
-    def __init__(self, context: str|None = None):
+    def __init__(self, context: str|None = None, profile: str = "default"):
         self.context = context
+        self.profile = profile
+        self.config = load_config(self.profile)
 
     def debug(self):
         console.log(Path("~/.chatgpt/config.yaml").expanduser().absolute())
 
-        config = load_config()
+        config = load_config(self.profile)
         console.log(config)
 
-    def run(self, profile: str = "default"):
+    def list_models(self, format: str="json"):
+        if format == "json":
+            console.print(json.dumps(ChatGPTClient(config=self.config).list_models(), indent=2))
+        else:
+            for obj in ChatGPTClient(config=self.config).list_models():
+                console.print(obj["id"])
+
+
+    def run(self, model: str | None = None):
         history = FileHistory(".history")
         session = PromptSession(history=history, multiline=True, auto_suggest=AutoSuggestFromHistory())
 
-        # try:
-        config = load_config(profile)
-
         #Run the display expense function when exiting the script
-        expence = Expense(config=config)
-        atexit.register(expence.display, model=config["model"])
+        expence = Expense(config=self.config)
+        atexit.register(expence.display, model=self.config["model"])
 
         console.print("ChatGPT CLI", style="bold")
-        console.print(f"Model in use: [green bold]{config['model']}")
-        chat_context = ChatContext(config)
+        console.print(f"Model in use: [green bold]{self.config['model']}")
+        chat_context = ChatContext(self.config)
         messages = chat_context.resolve()
 
         # Context from the command line option
@@ -283,7 +295,7 @@ class ChatGptCli:
 
 
         spinner = Halo(text='Waiting..', spinner='dots')
-        chat_gpt_client = ChatGPTClient(config=config)
+        chat_gpt_client = ChatGPTClient(model=model, config=self.config)
         while True:
             try:
                 input_message = session.prompt(HTML(f"<b>[{expence.total_tokens()}] >>> </b>"))
