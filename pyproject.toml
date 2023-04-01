@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "chatgpt_cli"
-version = "0.1.5"
+version = "0.1.6"
 description = "ChatGPT from CLI"
 authors = ["narita-atsuhiro <alayashiki@gmail.com>"]
 license = "MIT License"
@@ -21,6 +21,7 @@ pydantic = "^1.10.7"
 [tool.poetry.group.dev.dependencies]
 black = "^23.1.0"
 mypy = "^1.1.1"
+pytest = "^7.2.2"
 
 [tool.poetry.scripts]
 chatgpt_cli = "chatgpt_cli.cli:main"

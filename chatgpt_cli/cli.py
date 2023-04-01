@@ -18,6 +18,9 @@ from prompt_toolkit.history import FileHistory
 from pydantic import BaseModel
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.table import Table
+import re
+import json
 
 BASE_ENDPOINT = "https://api.openai.com/v1"
 
@@ -47,55 +50,87 @@ class Message(BaseModel):
     def from_list(cls, messages: list[dict]) -> list[Message]:
         return [cls(**message) for message in messages]
 
+    def show(self, console):
+        if self.role == "user":
+            console.print(">>> " + self.content.strip())
+            console.print()
+        if self.role == "assistant":
+            console.print(Markdown(self.content.strip()))
+            console.print()
+        if self.role == "system":
+            console.print(Markdown(self.content.strip()))
+            console.print()
+
 
 class ChatContext(BaseModel):
     config: dict
-    logfilepath: Path
+    time_prefix: str
+    title: str | None
 
     message_separator:str = "\n\n"
     json_anchor:str = "\n%%===```\n"
+    json_anchor_parse_candidates:list[str] = ["\n%%===```\n","\n%%===\n"]
 
-    def __init__(self, config:dict, title: str|None = None) -> None:
-        logdir = Path(config["chatlog"]["dir"]).expanduser()
+    @classmethod
+    def new(cls, config:dict, title: str|None = None) -> ChatContext:
         timestr = time.strftime("%Y%m%d-%H%M%S")
-        if title is None:
-            filename = f"{timestr}.md"
+        return cls(config=config, time_prefix=timestr, title=title)
+
+    @classmethod
+    def from_filename(cls, config:dict, filename: str) -> ChatContext:
+        pattern = r'(\d{8}-\d{6})-(.*).md'
+        match = re.match(pattern, filename)
+        time_prefix = match.group(1)
+        title = match.group(2)
+        return cls(config=config, time_prefix=time_prefix, title=title)
+
+    def filename(self) -> str:
+        if self.title is None:
+            return f"{self.time_prefix}.md"
         else:
-            filename = f"{timestr}-{title}.md"
-        super().__init__(config=config, logfilepath=logdir / filename)
+            return f"{self.time_prefix}-{self.title}.md"
+
+    def logfilepath(self) -> Path:
+        logdir = Path(self.config["chatlog"]["dir"]).expanduser()
+        return logdir / self.filename()
 
     @classmethod
     def list(cls, config) -> list[str]:
         logdir = Path(config["chatlog"]["dir"]).expanduser()
         return os.listdir(logdir)
 
+    def _extract_json(self, string):
+        pattern = r"\[.*\]"
+        match = re.search(pattern, string)
+        if match:
+            json_string = match.group()
+            try:
+                json_object = json.loads(json_string)
+                return json_object
+            except json.JSONDecodeError:
+                return None
+        else:
+            return None
 
     def resolve(self) -> list[Message]:
-        assert isinstance(self.logfilepath, Path)
-        messages = []
+        logfilepath = self.logfilepath()
 
         # make empty file if not exists.
-        if not self.logfilepath.exists():
-            with open(self.logfilepath, "w") as f:
+        if not logfilepath.exists():
+            with open(logfilepath, "w") as f:
                 pass
 
-        with open(self.logfilepath) as f:
+        with open(logfilepath) as f:
             content = f.read()
 
-            anchor_idx = content.find(self.json_anchor)
-            if anchor_idx >= 0:
-                # json部分
-                context_json = content[anchor_idx+len(self.json_anchor):]
-                messages = Message.from_list(json.loads(context_json))
-                for message in messages:
-                    if message.role == "user":
-                        console.print(">>> " + message.content.strip())
-                        console.print()
-                    if message.role == "assistant":
-                        console.print(Markdown(message.content.strip()))
-                        console.print()
-
-        return messages
+            for json_anchor in self.json_anchor_parse_candidates:
+                anchor_idx = content.find(json_anchor)
+                if anchor_idx >= 0:
+                    # セパレーター以降のJSONをパースして返す
+                    context_obj = self._extract_json(content[anchor_idx+len(self.json_anchor):])
+                    if context_obj is not None:
+                        return Message.from_list(context_obj)
+        return []
 
     def make_markdown(self, messages: list[Message]) -> str:
         body = ""
@@ -110,7 +145,7 @@ class ChatContext(BaseModel):
         body += f"{self.json_anchor}"
         body += json.dumps(Message.to_list(messages))
 
-        with open(self.logfilepath, "w") as f:
+        with open(self.logfilepath(), "w") as f:
             f.write(body)
 
 
@@ -263,8 +298,7 @@ class Expense(BaseModel):
 
 
 class ChatGptCli:
-    def __init__(self, context: str|None = None, profile: str = "default"):
-        self.context = context
+    def __init__(self, profile: str = "default"):
         self.profile = profile
         self.config = load_config(self.profile)
 
@@ -284,8 +318,29 @@ class ChatGptCli:
             for obj in ChatGPTClient(config=self.config).list_models():
                 console.print(obj["id"])
 
+    def list(self, format: str = "table", fullpath: bool = False):
+        assert format in ("json", "table")
+        logdir = Path(self.config["chatlog"]["dir"]).expanduser()
 
-    def run(self, model: str | None = None, title: str | None = None):
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Filename")
+        table.add_column("Content")
+
+        for directory in os.listdir(logdir):
+            console.print(logdir / directory if fullpath else directory)
+
+    def show(self, filename: str, fullpath: bool = False):
+        # logdir = Path(self.config["chatlog"]["dir"]).expanduser()
+        # filepath = logdir / filename if fullpath else logdir / filename
+        messages = ChatContext.from_filename(config=self.config, filename=filename).resolve()
+        # messages = ChatContext(config=self.config, logfilepath=filepath).resolve()
+        if len(messages) > 0:
+            for message in messages:
+                message.show(console)
+        else:
+            console.print("No messages found", style="red bold")
+
+    def dialogue(self, title: str | None, model: str | None = None, system_file: str | None = None, resume_from: str | None = None):
         history = FileHistory(".history")
         session = PromptSession(history=history, multiline=True, auto_suggest=AutoSuggestFromHistory())
 
@@ -295,15 +350,26 @@ class ChatGptCli:
 
         console.print("ChatGPT CLI", style="bold")
         console.print(f"Model in use: [green bold]{model or self.config['model']}")
-        chat_context = ChatContext(self.config, title)
+
+        if resume_from:
+            chat_context = ChatContext.from_filename(self.config, resume_from)
+            if title is not None:
+                console.print(f"[red bold]Title is ignored. \"{chat_context.title}\"is used instead.")
+        else:
+            chat_context = ChatContext.new(self.config, title)
+
         messages = chat_context.resolve()
+        for message in messages:
+            message.show(console)
 
-        # Context from the command line option
-        if self.context:
-            console.print(f"Context file: [green bold]{self.context}")
-            with open(Path(self.context).expanduser()) as file:
-                messages.append(Message(role="assistant", content=file.read().strip()))
-
+        # System context from the command line option
+        if system_file:
+            console.print(f"Context file: [green bold]{system_file}")
+            with open(Path(system_file).expanduser()) as file:
+                if len(messages) > 0 and messages[0].role == "system":
+                    messages[0].content = file.read().strip()
+                else:
+                    messages.insert(0, Message(role="system", content=file.read().strip()))
 
         spinner = Halo(text='Waiting..', spinner='dots')
         chat_gpt_client = ChatGPTClient(model=model, config=self.config)
@@ -311,6 +377,10 @@ class ChatGptCli:
             try:
                 input_message = session.prompt(HTML(f"<b>[{expence.total_tokens()}] >>> </b>"))
 
+                if input_message.strip().lower() == "/history":
+                    for message in messages:
+                        message.show(console)
+                    continue
                 if input_message.strip().lower() == "/q":
                     raise EOFError
                 if input_message.strip().lower() == "":
